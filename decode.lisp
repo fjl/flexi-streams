@@ -102,13 +102,16 @@ a form \(UNGET <form>) which has to be replaced by the correct code to
                   (can-rewind-p (maybe-rewind stream 0))
                   (factor (encoding-factor format))
                   (integer-factor (floor factor))
-                  ;; it's an interesting question whether it makes sense
+                  ;; The reserve: This adds some additional room in buffer
+                  ;; if we can't rewind or if the required buffer size is
+                  ;; an estimate.
+                  ;; It's an interesting question whether it makes sense
                   ;; performance-wise to make RESERVE significantly bigger
                   ;; (and thus put potentially a lot more octets into
                   ;; OCTET-STACK), especially for UTF-8
-                  (reserve (cond ((or (not (floatp factor))
-                                      (not can-rewind-p)) 0)
-                                 (t (ceiling (* (- factor integer-factor) (- end start)))))))
+                  (reserve (if (or (integerp factor) (not can-rewind-p))
+                               0
+                               (ceiling (* (- factor integer-factor)) (- end start)))))
              (declare (fixnum buffer-pos buffer-end index integer-factor reserve)
                       (boolean can-rewind-p))
              (labels ((compute-fill-amount ()
@@ -116,12 +119,10 @@ a form \(UNGET <form>) which has to be replaced by the correct code to
 the buffer without violating the stream's bound \(if there is one) and
 without potentially reading much more than we need \(unless we can
 rewind afterwards)."
-                        (let ((minimum (min (the fixnum (+ (the fixnum (* integer-factor
-                                                                          (the fixnum (- end index))))
-                                                           reserve))
-                                            +buffer-size+)))
-                          (cond (bound (min minimum (- bound position)))
-                                (t minimum))))
+                        (min (+ (* integer-factor (- end index)) reserve)
+                             (if bound (- bound position) most-positive-fixnum)
+                             ;; cap to reasonable amount
+                             +buffer-size+))
                       (fill-buffer (end)
                         "Tries to fill the buffer from BUFFER-POS to END and
 returns NIL if the buffer doesn't contain any new data."
@@ -150,15 +151,17 @@ returns NIL if the buffer doesn't contain any new data."
                         (unless (zerop buffer-end)
                           (incf position buffer-end)
                           t))
-                      (push-unused-buffer-octets ()
-                        "Stores any unused octets in BUFFER into the octet stack."
+                      (unread-buffered-octets ()
+                        "Restores any unused octets in BUFFER onto the stream."
                         (let ((rest (- buffer-end buffer-pos)))
                           (when (plusp rest)
-                            (or (and can-rewind-p
+                            (or ;; Try rewinding the stream first, it's way more
+                                ;; efficient.
+                                (and can-rewind-p
                                      (maybe-rewind stream rest))
-                                (loop
-                                  (when (>= buffer-pos buffer-end)
-                                    (return))
+                                ;; Rewind impossible, push unread
+                                ;; octets onto the stack instead.
+                                (loop while (< buffer-pos buffer-end) do
                                   (decf buffer-end)
                                   (push (aref (the (simple-array octet *) buffer) buffer-end)
                                         octet-stack))))))
@@ -179,7 +182,7 @@ returns NIL if the buffer doesn't contain any new data."
                             (values (progn ,@body))))))
                (declare (inline compute-fill-amount
                                 fill-buffer
-                                push-unused-buffer-octets
+                                unread-buffered-octets
                                 get-buffer-octet
                                 get-next-char-code))
                ;; Initialize the buffer, i.e. fill it for the first time.
@@ -204,7 +207,7 @@ access the sequence."
                                (declare (dynamic-extent #'leave))
                                (loop
                                  (when (>= index end)
-                                   (push-unused-buffer-octets)
+                                   (unread-buffered-octets)
                                    (leave))
                                  (let ((next-char-code (get-next-char-code)))
                                    (unless next-char-code
@@ -215,6 +218,7 @@ access the sequence."
                    (string (iterate (char sequence index)))
                    (array (iterate (aref sequence index)))
                    (list (iterate (nth index sequence)))))))))
+       ;; --
        (defmethod octets-to-string* ((format ,format-class) sequence start end)
          (declare #.*standard-optimize-settings*)
          (declare (fixnum start end))
@@ -227,8 +231,7 @@ access the sequence."
                    = (symbol-macrolet ((octet-getter
                                          (the (or null octet)
                                               (and (< i end)
-                                                   (prog1
-                                                       (the octet (aref sequence i))
+                                                   (prog1 (the octet (aref sequence i))
                                                      (incf i))))))
                        (macrolet ((unget (form)
                                     `(decf i (character-length format ,form))))
