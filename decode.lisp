@@ -297,103 +297,100 @@ the form which is used to obtain the next octet."
 (define-char-decoders (flexi-utf-8-format flexi-cr-utf-8-format flexi-crlf-utf-8-format)
   (let (first-octet-seen)
     (declare (boolean first-octet-seen))
-    (macrolet ((read-next-byte ()
-                 '(prog1
-                      (or octet-getter
-                          (cond (first-octet-seen
-                                 (return-from char-decoder
-                                   (recover-from-encoding-error format
-                                                                "End of data while in UTF-8 sequence.")))
-                                (t (return-from char-decoder nil))))
-                    (setq first-octet-seen t))))
-      (flet ((recover-from-overlong-sequence (value)
+    (labels ((read-next-byte ()
+               (the octet
+                    (prog1 (or octet-getter
+                               (return-from char-decoder
+                                 (when first-octet-seen
+                                   (recover-from-encoding-error
+                                    format "End of data while in UTF-8 sequence."))))
+                      (setq first-octet-seen t))))
+             (recover-from-overlong-sequence (value)
                (restart-case
                    (recover-from-encoding-error format "`Overlong' UTF-8 sequence for code point #x~X."
-                                                value)                 
+                                                value)
                  (accept-overlong-sequence ()
                    :report "Accept the code point and continue."
                    value))))
-        (let ((octet (read-next-byte)))
-          (declare (type octet octet))
-          (block utf-8-sequence
-            (multiple-value-bind (start count)
-                (cond ((not (logbitp 7 octet))
-                       ;; avoid the overlong checks below
-                       (return-from utf-8-sequence octet))
-                      ((= #b11000000 (logand* octet #b11100000))
-                       (values (logand* octet #b00011111) 1))
-                      ((= #b11100000 (logand* octet #b11110000))
-                       (values (logand* octet #b00001111) 2))
-                      ((= #b11110000 (logand* octet #b11111000))
-                       (values (logand* octet #b00000111) 3))
-                      (t (return-from char-decoder
-                           (recover-from-encoding-error format
-                                                        "Unexpected value #x~X at start of UTF-8 sequence."
-                                                        octet))))
-              (declare (fixnum count))
-              (loop for result of-type code-point
+      (declare (inline read-next-byte))
+      (let ((octet (read-next-byte)))
+        (declare (type octet octet))
+        (block utf-8-sequence
+          (multiple-value-bind (start count)
+              (cond ((not (logbitp 7 octet))
+                     ;; avoid the overlong checks below
+                     (return-from utf-8-sequence octet))
+                    ((= #b11000000 (logand* octet #b11100000))
+                     (values (logand* octet #b00011111) 1))
+                    ((= #b11100000 (logand* octet #b11110000))
+                     (values (logand* octet #b00001111) 2))
+                    ((= #b11110000 (logand* octet #b11111000))
+                     (values (logand* octet #b00000111) 3))
+                    (t (return-from char-decoder
+                         (recover-from-encoding-error format
+                                                      "Unexpected value #x~X at start of UTF-8 sequence."
+                                                      octet))))
+            (declare (fixnum count))
+            (loop for result of-type code-point
                     = start then (+ (ash* result 6)
                                     (logand* octet #b111111))
-                    repeat count
-                    for octet of-type octet = (read-next-byte)
-                    unless (= #b10000000 (logand* octet #b11000000))
+                  repeat count
+                  for octet of-type octet = (read-next-byte)
+                  unless (= #b10000000 (logand* octet #b11000000))
                     do (return-from char-decoder
                          (recover-from-encoding-error format
                                                       "Unexpected value #x~X in UTF-8 sequence." octet))
-                    finally (return (cond ((< result (ecase count
-                                                       (1 #x00080)
-                                                       (2 #x00800)
-                                                       (3 #x10000)))
-                                           (recover-from-overlong-sequence result))
-                                          (t result)))))))))))
+                  finally (return (cond ((< result (ecase count
+                                                     (1 #x00080)
+                                                     (2 #x00800)
+                                                     (3 #x10000)))
+                                         (recover-from-overlong-sequence result))
+                                        (t result))))))))))
 
 (define-char-decoders (flexi-utf-16-le-format flexi-cr-utf-16-le-format flexi-crlf-utf-16-le-format)
   (let (first-octet-seen)
     (declare (boolean first-octet-seen))
-    (macrolet ((read-next-byte ()
-                 '(prog1
-                      (or octet-getter
-                          (cond (first-octet-seen
-                                 (return-from char-decoder
-                                   (recover-from-encoding-error format
-                                                                "End of data while in UTF-16 sequence.")))
-                                (t (return-from char-decoder nil))))
-                    (setq first-octet-seen t))))
-      (flet ((read-next-word ()
-               (+ (the octet (read-next-byte))
-                  (ash* (the octet (read-next-byte)) 8))))
-        (declare (inline read-next-word))
-        (let ((word (read-next-word)))
-          (declare (type (unsigned-byte 16) word))
-          (cond ((<= #xd800 word #xdfff)
-                 (let ((next-word (read-next-word)))
-                   (declare (type (unsigned-byte 16) next-word))
-                   (unless (<= #xdc00 next-word #xdfff)
-                     (return-from char-decoder
-                       (recover-from-encoding-error format
-                                                    "Unexpected UTF-16 word #x~X following #x~X."
-                                                    next-word word)))
-                   (+ (ash* (logand* #b1111111111 word) 10)
-                      (logand* #b1111111111 next-word)
-                      #x10000)))
-                (t word)))))))
+    (labels ((read-next-byte ()
+               (the octet
+                    (prog1 (or octet-getter
+                               (return-from char-decoder
+                                 (when first-octet-seen
+                                   (recover-from-encoding-error
+                                    format "End of data while in UTF-16 sequence."))))
+                      (setf first-octet-seen t))))
+             (read-next-word ()
+               (the (unsigned-byte 16)
+                    (+ (read-next-byte)
+                       (ash* (read-next-byte) 8)))))
+      (declare (inline read-next-byte read-next-word))
+      (let ((word (read-next-word)))
+        (cond ((<= #xd800 word #xdfff)
+               (let ((next-word (read-next-word)))
+                 (unless (<= #xdc00 next-word #xdfff)
+                   (return-from char-decoder
+                     (recover-from-encoding-error format
+                                                  "Unexpected UTF-16 word #x~X following #x~X."
+                                                  next-word word)))
+                 (+ (ash* (logand* #b1111111111 word) 10)
+                    (logand* #b1111111111 next-word)
+                    #x10000)))
+              (t word))))))
 
 (define-char-decoders (flexi-utf-16-be-format flexi-cr-utf-16-be-format flexi-crlf-utf-16-be-format)
   (let (first-octet-seen)
     (declare (boolean first-octet-seen))
-    (macrolet ((read-next-byte ()
-                 '(prog1
-                      (or octet-getter
-                          (cond (first-octet-seen
-                                 (return-from char-decoder
-                                   (recover-from-encoding-error format
-                                                                "End of data while in UTF-16 sequence.")))
-                                (t (return-from char-decoder nil))))
-                    (setq first-octet-seen t))))
-      (flet ((read-next-word ()
+    (labels ((read-next-byte ()
+               (the octet
+                    (prog1 (or octet-getter
+                               (return-from char-decoder
+                                 (when first-octet-seen
+                                   (recover-from-encoding-error
+                                    format "End of data while in UTF-16 sequence."))))
+                      (setq first-octet-seen t))))
+             (read-next-word ()
                (+ (ash* (the octet (read-next-byte)) 8)
                   (the octet (read-next-byte)))))
-        (declare (inline read-next-word))
+        (declare (inline read-next-word read-next-byte))
         (let ((word (read-next-word)))
           (declare (type (unsigned-byte 16) word))
           (cond ((<= #xd800 word #xdfff)
@@ -407,7 +404,8 @@ the form which is used to obtain the next octet."
                    (+ (ash* (logand* #b1111111111 word) 10)
                       (logand* #b1111111111 next-word)
                       #x10000)))
-                (t word)))))))
+                (t word))))))
+
 (define-char-decoders (flexi-gbk-format flexi-cr-gbk-format flexi-crlf-gbk-format)
   (when-let (octet octet-getter)
     (cond ((<= (the octet octet) #x7f) octet)
@@ -431,34 +429,36 @@ the form which is used to obtain the next octet."
 (define-char-decoders (flexi-utf-32-le-format flexi-cr-utf-32-le-format flexi-crlf-utf-32-le-format)
   (let (first-octet-seen)
     (declare (boolean first-octet-seen))
-    (macrolet ((read-next-byte ()
-                 '(prog1
-                      (or octet-getter
-                          (cond (first-octet-seen
+        (flet ((read-next-byte ()
+                 (the octet
+                      (prog1 (or octet-getter
                                  (return-from char-decoder
-                                   (recover-from-encoding-error format
-                                                                "End of data while in UTF-32 sequence.")))
-                                (t (return-from char-decoder nil))))
-                    (setq first-octet-seen t))))
-      (loop for count of-type fixnum from 0 to 24 by 8
-            for octet of-type octet = (read-next-byte)
-            sum (ash* octet count)))))
+                                   (when first-octet-seen
+                                     (recover-from-encoding-error
+                                      format "End of data while in UTF-32 sequence."))))
+                        (setq first-octet-seen t)))))
+      (declare (inline read-next-byte))
+      (+ (read-next-byte)
+         (ash* (read-next-byte) 8)
+         (ash* (read-next-byte) 16)
+         (ash* (read-next-byte) 24)))))
 
 (define-char-decoders (flexi-utf-32-be-format flexi-cr-utf-32-be-format flexi-crlf-utf-32-be-format)
   (let (first-octet-seen)
     (declare (boolean first-octet-seen))
-    (macrolet ((read-next-byte ()
-                 '(prog1
-                      (or octet-getter
-                          (cond (first-octet-seen
-                                 (return-from char-decoder
-                                   (recover-from-encoding-error format
-                                                                "End of data while in UTF-32 sequence.")))
-                                (t (return-from char-decoder nil))))
-                    (setq first-octet-seen t))))
-      (loop for count of-type fixnum from 24 downto 0 by 8
-            for octet of-type octet = (read-next-byte)
-            sum (ash* octet count)))))
+    (flet ((read-next-byte ()
+             (the octet
+                  (prog1 (or octet-getter
+                             (return-from char-decoder
+                               (when first-octet-seen
+                                 (recover-from-encoding-error
+                                  format "End of data while in UTF-32 sequence."))))
+                    (setq first-octet-seen t)))))
+      (declare (inline read-next-byte))
+      (+ (ash* (read-next-byte) 24)
+         (ash* (read-next-byte) 16)
+         (ash* (read-next-byte) 8)
+         (read-next-byte)))))
 
 (defmethod octets-to-char-code ((format flexi-cr-mixin) reader)
   (declare #.*fixnum-optimize-settings*)
@@ -486,4 +486,3 @@ the form which is used to obtain the next octet."
            (otherwise (funcall *current-unreader* (code-char next-char-code))
                       char-code))))
       (otherwise char-code))))
-
