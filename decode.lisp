@@ -244,8 +244,7 @@ the form which is used to obtain the next octet."
     `(progn
        (defmethod octets-to-char-code ((format ,lf-format-class) reader)
          (declare #.*fixnum-optimize-settings*)
-         (declare (function reader))
-         (symbol-macrolet ((octet-getter (funcall reader)))
+         (symbol-macrolet ((octet-getter (the (or null octet) (funcall (the function reader)))))
            ,@(sublis '((char-decoder . octets-to-char-code))
                      body)))
        (define-sequence-readers (,lf-format-class) ,@body)
