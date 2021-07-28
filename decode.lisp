@@ -223,14 +223,17 @@ access the sequence."
                 (string (make-string string-length :element-type 'char*)))
            (declare (fixnum i string-length))
            (loop for j of-type fixnum from 0 below string-length
-                 do (setf (schar string j)
-                          (code-char (macrolet ((unget (form)
-                                                  `(decf i (character-length format ,form))))
-                                       (symbol-macrolet ((octet-getter (and (< i end)
-                                                                            (prog1
-                                                                                (the octet (aref sequence i))
-                                                                              (incf i)))))
-                                         ,@body))))
+                 for code
+                   = (symbol-macrolet ((octet-getter
+                                         (the (or null octet)
+                                              (and (< i end)
+                                                   (prog1
+                                                       (the octet (aref sequence i))
+                                                     (incf i))))))
+                       (macrolet ((unget (form)
+                                    `(decf i (character-length format ,form))))
+                         ,@body))
+                 do (setf (schar string j) (code-char code))
                  finally (return string)))))))
 
 (defmacro define-char-decoders ((lf-format-class cr-format-class crlf-format-class) &body body)
