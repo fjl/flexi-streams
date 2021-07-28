@@ -84,7 +84,6 @@ a form \(UNGET <form>) which has to be replaced by the correct code to
                      ,@body)))))
     `(progn
        (defmethod read-sequence* ((format ,format-class) flexi-input-stream sequence start end)
-         (declare #.*standard-optimize-settings*)
          (declare (fixnum start end))
          (with-accessors ((position flexi-stream-position)
                           (bound flexi-stream-bound)
