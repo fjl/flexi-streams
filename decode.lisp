@@ -80,11 +80,12 @@ a form \(UNGET <form>) which has to be replaced by the correct code to
 `unread' the octets for the character designated by <form>."
   (let* ((body `((block char-decoder
                    (locally
-                     (declare #.*fixnum-optimize-settings*)
+                       (declare #.*fixnum-optimize-settings*)
                      ,@body)))))
     `(progn
        (defmethod read-sequence* ((format ,format-class) flexi-input-stream sequence start end)
-         (declare #.*fixnum-optimize-settings*)
+         (declare #.*standard-optimize-settings*)
+         (declare (fixnum start end))
          (with-accessors ((position flexi-stream-position)
                           (bound flexi-stream-bound)
                           (octet-stack flexi-stream-octet-stack)
@@ -111,99 +112,106 @@ a form \(UNGET <form>) which has to be replaced by the correct code to
                                  (t (ceiling (* (- factor integer-factor) (- end start)))))))
              (declare (fixnum buffer-pos buffer-end index integer-factor reserve)
                       (boolean can-rewind-p))
-             (flet ((compute-fill-amount ()
-                      "Computes the amount of octets we can savely read into
+             (labels ((compute-fill-amount ()
+                        "Computes the amount of octets we can safely read into
 the buffer without violating the stream's bound \(if there is one) and
 without potentially reading much more than we need \(unless we can
 rewind afterwards)."
-                      (let ((minimum (min (the fixnum (+ (the fixnum (* integer-factor
-                                                                        (the fixnum (- end index))))
-                                                         reserve))
-                                          +buffer-size+)))
-                        (cond (bound (min minimum (- bound position)))
-                              (t minimum))))
-                    (fill-buffer (end)
-                      "Tries to fill the buffer from BUFFER-POS to END and
+                        (let ((minimum (min (the fixnum (+ (the fixnum (* integer-factor
+                                                                          (the fixnum (- end index))))
+                                                           reserve))
+                                            +buffer-size+)))
+                          (cond (bound (min minimum (- bound position)))
+                                (t minimum))))
+                      (fill-buffer (end)
+                        "Tries to fill the buffer from BUFFER-POS to END and
 returns NIL if the buffer doesn't contain any new data."
-                      (when donep
-                        (return-from fill-buffer nil))
-                      ;; put data from octet stack into buffer if there is any
-                      (loop
-                       (when (>= buffer-pos end)
-                         (return))
-                       (let ((next-octet (pop octet-stack)))
-                         (cond (next-octet
-                                (setf (aref (the (simple-array octet *) buffer) buffer-pos) (the octet next-octet))
-                                (incf buffer-pos))
-                               (t (return)))))
-                      (setq buffer-end (read-sequence buffer stream
-                                                      :start buffer-pos
-                                                      :end end))
-                      ;; we reached EOF, so we remember this
-                      (when (< buffer-end end)
-                        (setq donep t))
-                      ;; BUFFER-POS is only greater than zero if the buffer
-                      ;; already contains unread data from the octet stack
-                      ;; (see below), so we test for ZEROP here and do /not/
-                      ;; compare with BUFFER-POS
-                      (unless (zerop buffer-end)
-                        (incf position buffer-end))))
+                        (when donep
+                          (return-from fill-buffer nil))
+                        ;; put data from octet stack into buffer if there is any
+                        (loop
+                          (when (>= buffer-pos end)
+                            (return))
+                          (let ((next-octet (pop octet-stack)))
+                            (cond (next-octet
+                                   (setf (aref (the (simple-array octet *) buffer) buffer-pos)
+                                         (the octet next-octet))
+                                   (incf buffer-pos))
+                                  (t (return)))))
+                        (setq buffer-end (read-sequence buffer stream
+                                                        :start buffer-pos
+                                                        :end end))
+                        ;; we reached EOF, so we remember this
+                        (when (< buffer-end end)
+                          (setq donep t))
+                        ;; BUFFER-POS is only greater than zero if the buffer
+                        ;; already contains unread data from the octet stack
+                        ;; (see below), so we test for ZEROP here and do /not/
+                        ;; compare with BUFFER-POS
+                        (unless (zerop buffer-end)
+                          (incf position buffer-end)
+                          t))
+                      (push-unused-buffer-octets ()
+                        "Stores any unused octets in BUFFER into the octet stack."
+                        (let ((rest (- buffer-end buffer-pos)))
+                          (when (plusp rest)
+                            (or (and can-rewind-p
+                                     (maybe-rewind stream rest))
+                                (loop
+                                  (when (>= buffer-pos buffer-end)
+                                    (return))
+                                  (decf buffer-end)
+                                  (push (aref (the (simple-array octet *) buffer) buffer-end)
+                                        octet-stack))))))
+                      (get-buffer-octet ()
+                        "Gets the next octet from BUFFER, refilling it if needed."
+                        (when (>= buffer-pos buffer-end)
+                          ;; Refill required.
+                          (setq buffer-pos 0)
+                          (unless (fill-buffer (compute-fill-amount))
+                            (return-from get-buffer-octet nil)))
+                        ;; Get the next byte.
+                        (prog1 (aref (the (simple-array octet *) buffer) buffer-pos)
+                          (incf buffer-pos)))
+                      (get-next-char-code ()
+                        "Runs the character decoder with octets from buffer."
+                        (symbol-macrolet ((octet-getter (the (or null octet) (get-buffer-octet))))
+                          (macrolet ((unget (form) `(unread-char% ,form flexi-input-stream)))
+                            (values (progn ,@body))))))
+               (declare (inline compute-fill-amount
+                                fill-buffer
+                                push-unused-buffer-octets
+                                get-buffer-octet
+                                get-next-char-code))
+               ;; Initialize the buffer, i.e. fill it for the first time.
                (let ((minimum (compute-fill-amount)))
                  (declare (fixnum minimum))
                  (setq buffer (make-octet-buffer minimum))
-                 ;; fill buffer for the first time or return immediately if
-                 ;; we don't succeed
                  (unless (fill-buffer minimum)
-                   (return-from read-sequence* start)))
-               (setq buffer-pos 0)
+                   (return-from read-sequence* start))
+                 (setq buffer-pos 0))
+               ;; Define handlers for sequence types.
                (macrolet ((iterate (set-place)
                             "A very unhygienic macro to implement the
 actual iteration through the sequence including housekeeping for the
 flexi stream.  SET-PLACE is the place \(using the index INDEX) used to
 access the sequence."
                             `(flet ((leave ()
-                                      "This is the function used to
-abort the LOOP iteration below."
+                                      "This aborts the LOOP iteration below."
                                       (when (> index start)
                                         (setq last-octet nil
                                               last-char-code ,(sublis '((index . (1- index))) set-place)))
                                       (return-from read-sequence* index)))
+                               (declare (dynamic-extent #'leave))
                                (loop
-                                (when (>= index end)
-                                  ;; check if there are octets in the
-                                  ;; buffer we didn't use - see
-                                  ;; COMPUTE-FILL-AMOUNT above
-                                  (let ((rest (- buffer-end buffer-pos)))
-                                    (when (plusp rest)
-                                      (or (and can-rewind-p
-                                               (maybe-rewind stream rest))
-                                          (loop
-                                           (when (>= buffer-pos buffer-end)
-                                             (return))
-                                           (decf buffer-end)
-                                           (push (aref (the (simple-array octet *) buffer) buffer-end)
-                                                 octet-stack)))))
-                                  (leave))
-                                (let ((next-char-code
-                                       (progn (symbol-macrolet
-                                                  ((octet-getter
-                                                    ;; this is the code to retrieve the next octet (or
-                                                    ;; NIL) and to fill the buffer if needed
-                                                     (the (or null octet)
-                                                          (block next-octet
-                                                            (when (>= buffer-pos buffer-end)
-                                                              (setq buffer-pos 0)
-                                                              (unless (fill-buffer (compute-fill-amount))
-                                                                (return-from next-octet)))
-                                                            (prog1 (aref (the (simple-array octet *) buffer) buffer-pos)
-                                                              (incf buffer-pos))))))
-                                                (macrolet ((unget (form)
-                                                             `(unread-char% ,form flexi-input-stream)))
-                                                  ,',@body)))))
-                                  (unless next-char-code
-                                    (leave))
-                                  (setf ,set-place (code-char next-char-code))
-                                  (incf index))))))
+                                 (when (>= index end)
+                                   (push-unused-buffer-octets)
+                                   (leave))
+                                 (let ((next-char-code (get-next-char-code)))
+                                   (unless next-char-code
+                                     (leave))
+                                   (setf ,set-place (code-char next-char-code))
+                                   (incf index))))))
                  (etypecase sequence
                    (string (iterate (char sequence index)))
                    (array (iterate (aref sequence index)))
