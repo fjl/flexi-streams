@@ -132,7 +132,7 @@ returns NIL if the buffer doesn't contain any new data."
                          (return))
                        (let ((next-octet (pop octet-stack)))
                          (cond (next-octet
-                                (setf (aref (the (array octet *) buffer) buffer-pos) (the octet next-octet))
+                                (setf (aref (the (simple-array octet *) buffer) buffer-pos) (the octet next-octet))
                                 (incf buffer-pos))
                                (t (return)))))
                       (setq buffer-end (read-sequence buffer stream
@@ -180,7 +180,7 @@ abort the LOOP iteration below."
                                            (when (>= buffer-pos buffer-end)
                                              (return))
                                            (decf buffer-end)
-                                           (push (aref (the (array octet *) buffer) buffer-end)
+                                           (push (aref (the (simple-array octet *) buffer) buffer-end)
                                                  octet-stack)))))
                                   (leave))
                                 (let ((next-char-code
@@ -188,14 +188,14 @@ abort the LOOP iteration below."
                                                   ((octet-getter
                                                     ;; this is the code to retrieve the next octet (or
                                                     ;; NIL) and to fill the buffer if needed
-                                                    (block next-octet
-                                                      (when (>= buffer-pos buffer-end)
-                                                        (setq buffer-pos 0)
-                                                        (unless (fill-buffer (compute-fill-amount))
-                                                          (return-from next-octet)))
-                                                      (prog1
-                                                          (aref (the (array octet *) buffer) buffer-pos)
-                                                        (incf buffer-pos)))))
+                                                     (the (or null octet)
+                                                          (block next-octet
+                                                            (when (>= buffer-pos buffer-end)
+                                                              (setq buffer-pos 0)
+                                                              (unless (fill-buffer (compute-fill-amount))
+                                                                (return-from next-octet)))
+                                                            (prog1 (aref (the (simple-array octet *) buffer) buffer-pos)
+                                                              (incf buffer-pos))))))
                                                 (macrolet ((unget (form)
                                                              `(unread-char% ,form flexi-input-stream)))
                                                   ,',@body)))))
