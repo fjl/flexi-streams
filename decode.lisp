@@ -212,7 +212,7 @@ abort the LOOP iteration below."
          (declare (fixnum start end))
          (let* ((i start)
                 (string-length (compute-number-of-chars format sequence start end))
-                (string (make-array string-length :element-type 'char*)))
+                (string (make-string string-length :element-type 'char*)))
            (declare (fixnum i string-length))
            (loop for j of-type fixnum from 0 below string-length
                  do (setf (schar string j)
