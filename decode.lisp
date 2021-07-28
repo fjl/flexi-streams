@@ -337,9 +337,9 @@ the form which is used to obtain the next octet."
                   repeat count
                   for octet of-type octet = (read-next-byte)
                   unless (= #b10000000 (logand* octet #b11000000))
-                    do (return-from char-decoder
-                         (recover-from-encoding-error format
-                                                      "Unexpected value #x~X in UTF-8 sequence." octet))
+                    return (recover-from-encoding-error format
+                                                        "Unexpected value #x~X in UTF-8 sequence."
+                                                        octet)
                   finally (return (cond ((< result (ecase count
                                                      (1 #x00080)
                                                      (2 #x00800)
