@@ -35,19 +35,22 @@ encoding errors.  Checks if *SUBSTITUTION-CHAR* is not NIL and returns
 its character code in this case.  Otherwise signals an
 EXTERNAL-FORMAT-ENCODING-ERROR as determined by the arguments to this
 function and provides a corresponding USE-VALUE restart."
-  (when *substitution-char*
-    (return-from recover-from-encoding-error (char-code *substitution-char*)))
-  (restart-case
-      (apply #'signal-encoding-error external-format format-control format-args)
-    (use-value (char)
-      :report "Specify a character to be used instead."
-      :interactive (lambda ()
-                     (loop
-                      (format *query-io* "Type a character: ")
-                      (let ((line (read-line *query-io*)))
-                        (when (= 1 (length line))
-                          (return (list (char line 0)))))))
-      (char-code char))))
+  (if *substitution-char*
+      (char-code *substitution-char*)
+      (values
+       (restart-case
+           (apply #'signal-encoding-error external-format format-control format-args)
+         (use-value (char)
+           :report "Specify a character to be used instead."
+           :interactive (lambda ()
+                          (loop
+                            (format *query-io* "Type a character: ")
+                            (let ((line (read-line *query-io*)))
+                              (when (= 1 (length line))
+                                (return (list (char line 0)))))))
+           (char-code char))))))
+
+(declaim (ftype (function * char-code-integer) recover-from-encoding-error))
 
 (defgeneric octets-to-char-code (format reader)
   (declare #.*standard-optimize-settings*)
