@@ -222,6 +222,14 @@ access the sequence."
        (defmethod octets-to-string* ((format ,format-class) sequence start end)
          (declare #.*standard-optimize-settings*)
          (declare (fixnum start end))
+         ;; This pre-creates the string to the exact length required.
+         ;; Note that this also works for invalid encodings. COMPUTE-NUMBER-OF-CHARS
+         ;; doesn't check errors, but we assume that it will always be able to at least
+         ;; count the number of characters correctly, even if the characters are not valid.
+         ;;
+         ;; Wrong encodings are caught by the char-code decoder, which will either choose
+         ;; a 1-character replacement or abort the conversion, so the length will still
+         ;; be correct.
          (let* ((i start)
                 (string-length (compute-number-of-chars format sequence start end))
                 (string (make-string string-length :element-type 'char*)))
