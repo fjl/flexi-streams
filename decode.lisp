@@ -271,6 +271,7 @@ the form which is used to obtain the next octet."
        (define-sequence-readers  (,crlf-format-class)
          ,(with-unique-names (char-code next-char-code get-char-code)
             `(flet ((,get-char-code () ,@body))
+               (declare (dynamic-extent (function ,get-char-code)))
                (let ((,char-code (,get-char-code)))
                  (case ,char-code
                    (#.+cr+
